@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Trig Pool Game</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; background: #222; color: #eee; }
+    #menu, #controls, #solutionOverlay, #errorOverlay {
+      position: absolute; width: 100%; text-align: center;
+    }
+    #menu { top: 10px; z-index: 3; }
+    #controls {
+      top: 50px; left: 50%; transform: translateX(-50%);
+      z-index: 3; background: rgba(0,0,0,0.5);
+      padding: 10px; border-radius: 8px; display: none;
+    }
+    #tableContainer {
+      width: 800px; height: 400px; margin: 120px auto 0;
+      border: 20px solid #8B4513; border-radius: 30px;
+      background: #8B4513; position: relative; z-index: 1;
+    }
+    #tableContainer canvas {
+      display: block; margin: 0; background: #0a5;
+    }
+    #solutionOverlay, #errorOverlay {
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.8); display: none;
+      color: #fff; z-index: 4;
+    }
+    #solutionOverlay canvas, #errorOverlay canvas { background: transparent; }
+    #solutionText, #errorText {
+      position: absolute; top: 20px; left: 20px; text-align: left;
+    }
+    button { padding: 6px 12px; margin: 6px; }
+  </style>
+</head>
+<body>
+  <div id="menu">
+    <h1>Select Game Type</h1>
+    <button onclick="startGame('8-ball')">8-Ball</button>
+    <button onclick="startGame('9-ball')">9-Ball</button>
+  </div>
+  <div id="controls">
+    Player: <span id="playerLabel">1</span>
+    <select id="unitSelect"><option>Degrees</option><option>Radians</option></select>
+    <select id="ratioTypeSelect">
+      <option>sin</option><option>cos</option><option>tan</option>
+      <option>csc</option><option>sec</option><option>cot</option>
+    </select>
+    <select id="ratioValueSelect">
+      <option value="0" selected>0</option>
+      <option value="decimal">Enter decimal...</option>
+      <option value="-1">-1</option>
+      <option value="-0.8660254037844386">-√3/2</option>
+      <option value="-0.7071067811865475">-√2/2</option>
+      <option value="-0.7071067811865475">-1/√2</option>
+      <option value="-0.5">-1/2</option>
+      <option value="0.5">1/2</option>
+      <option value="0.7071067811865476">√2/2</option>
+      <option value="0.7071067811865476">1/√2</option>
+      <option value="0.8660254037844386">√3/2</option>
+      <option value="1">1</option>
+    </select>
+    <input type="number" id="decimalInput" placeholder="Decimal" style="display:none;width:60px;" step="0.01" />
+    <select id="quadrantSelect">
+      <option value="1">Quadrant I</option>
+      <option value="2">Quadrant II</option>
+      <option value="3">Quadrant III</option>
+      <option value="4">Quadrant IV</option>
+    </select>
+    Power: <input type="range" id="powerSlider" min="1" max="16" step="1" value="5" />
+    Friction: <input type="range" id="frictionSlider" min="0.005" max="0.025" step="0.005" value="0.01" />
+    <button id="analyzeBtn">Analyze Path</button>
+    <button id="shootBtn">Shoot</button>
+  </div>
+  <div id="tableContainer">
+    <canvas id="tableCanvas" width="800" height="400"></canvas>
+  </div>
+  <div id="solutionOverlay">
+    <canvas id="solutionCanvas" width="800" height="400"></canvas>
+    <div id="solutionText"></div>
+    <button onclick="hideSolution()">Continue</button>
+  </div>
+  <div id="errorOverlay">
+    <div id="errorText"></div>
+    <button onclick="hideError()">OK</button>
+  </div>
+  <script>
+    const sidePocketRadius = 16 * 1.3;
+    const cornerPocketRadius = sidePocketRadius * 1.3;
+    const canvas = document.getElementById('tableCanvas'), ctx = canvas.getContext('2d');
+    const solCanvas = document.getElementById('solutionCanvas'), solCtx = solCanvas.getContext('2d');
+    let gameType, currentPlayer = 1, balls = [];
+    const ballRadius = 10;
+    let showGrid = false, showArm = false;
+    let armVector = { x: 0, y: 0 };
+    const pockets = [
+      { x: 0, y: 0, r: cornerPocketRadius },
+      { x: 400, y: 0, r: sidePocketRadius },
+      { x: 800, y: 0, r: cornerPocketRadius },
+      { x: 0, y: 400, r: cornerPocketRadius },
+      { x: 400, y: 400, r: sidePocketRadius },
+      { x: 800, y: 400, r: cornerPocketRadius }
+    ];
+    const ballColors = {1:'#FFFF00',2:'#0000FF',3:'#FF0000',4:'#800080',5:'#FFA500',6:'#008000',7:'#800000',8:'#000000',9:'#FFFF00',10:'#0000FF',11:'#FF0000',12:'#800080',13:'#FFA500',14:'#008000',15:'#800000'};
+
+    document.getElementById('ratioValueSelect').addEventListener('change', e => {
+      document.getElementById('decimalInput').style.display = e.target.value === 'decimal' ? 'inline' : 'none';
+    });
+    document.getElementById('analyzeBtn').addEventListener('click', analyzePath);
+    document.getElementById('shootBtn').addEventListener('click', () => { showGrid = false; showArm = false; handleShoot(); });
+
+    function computeTheta() {
+      const type = document.getElementById('ratioTypeSelect').value;
+      const valSel = document.getElementById('ratioValueSelect').value;
+      const val = valSel === 'decimal' ? parseFloat(document.getElementById('decimalInput').value) : parseFloat(valSel);
+      if (isNaN(val)) return null;
+      const quad = parseInt(document.getElementById('quadrantSelect').value, 10);
+      const raw = ['csc','sec','cot'].includes(type) ? 1/val : val;
+      const absVal = Math.abs(raw);
+      let theta = /sin|csc/.test(type) ? Math.asin(absVal)
+                 : /cos|sec/.test(type) ? Math.acos(absVal)
+                 : Math.atan(absVal);
+      switch (quad) {
+        case 2: theta = Math.PI - theta; break;
+        case 3: theta = Math.PI + theta; break;
+        case 4: theta = 2*Math.PI - theta; break;
+      }
+      return theta;
+    }
+
+    function analyzePath() {
+      const theta = computeTheta();
+      if (theta === null) return;
+      // Show grid and arm: arrow length 100px
+      showGrid = true;
+      armVector.x = Math.cos(theta) * 100;
+      armVector.y = -Math.sin(theta) * 100;
+      showArm = true;
+      drawTable();
+    }
+
+    function handleShoot() {
+      const ratioType = document.getElementById('ratioTypeSelect').value;
+      const valSel = document.getElementById('ratioValueSelect').value;
+      const val = valSel === 'decimal' ? parseFloat(document.getElementById('decimalInput').value) : parseFloat(valSel);
+      if (isNaN(val)) return;
+      const quad = parseInt(document.getElementById('quadrantSelect').value, 10);
+      const power = parseFloat(document.getElementById('powerSlider').value) * 0.8;
+      const friction = parseFloat(document.getElementById('frictionSlider').value) * 0.85;
+      const raw = ['csc','sec','cot'].includes(ratioType) ? 1/val : val;
+      // CAST rule omitted; assume valid
+      const absVal = Math.abs(raw);
+      let theta = /sin|csc/.test(ratioType) ? Math.asin(absVal)
+                 : /cos|sec/.test(ratioType) ? Math.acos(absVal)
+                 : Math.atan(absVal);
+      switch (quad) {
+        case 2: theta = Math.PI - theta; break;
+        case 3: theta = Math.PI + theta; break;
+        case 4: theta = 2*Math.PI - theta; break;
+      }
+      balls[0].vx = Math.cos(theta) * power;
+      balls[0].vy = Math.sin(-theta) * power;
+      balls.forEach(b => b.friction = friction);
+      animateShot();
+    }
+
+    function startGame(type) {
+      gameType = type;
+      document.getElementById('menu').style.display = 'none';
+      document.getElementById('controls').style.display = 'block';
+      document.getElementById('playerLabel').textContent = currentPlayer;
+      initBalls();
+      drawTable();
+    }
+
+    function shuffle(arr) { return arr.sort(() => Math.random()-0.5); }
+
+    function initBalls() {
+      balls = [{ x:100, y:canvas.height/2, vx:0, vy:0, mass:1, number:0, color:'#fff', friction:0 }];
+      const sx = 500, sy = canvas.height/2;
+      const pattern = gameType==='8-ball' ? [1,2,3,4,5] : [1,2,3,2,1];
+      const nums = shuffle(gameType==='8-ball' ? [1,2,3,4,5,6,7,9,10,11,12,13,14,15] : [1,2,3,4,5,6,7,8]);
+      pattern.forEach((cnt,r) => {
+        for(let c=0;c<cnt;c++){
+          const num = (r===Math.floor(pattern.length/2) && c===1) ? (gameType==='8-ball'?8:9) : nums.shift();
+          balls.push({ x:sx + r*2*ballRadius, y:sy+(c-(cnt-1)/2)*2*ballRadius, vx:0, vy:0, mass:1, number:num, isStripe:num>8, color:ballColors[num], friction:0 });
+        }
+      });
+    }
+
+    function drawTable() {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle='#060'; ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle='#000'; pockets.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,2*Math.PI);ctx.fill();});
+      if (showGrid) drawGrid();
+      balls.forEach(drawBall);
+      if (showArm) drawArm();
+    }
+
+    function drawGrid() {
+      const spacing = 25;
+      const origin = balls[0];
+      ctx.save();
+      ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1;
+      ctx.font='12px sans-serif'; ctx.fillStyle='#fff';
+      // vertical lines
+      for(let x=origin.x % spacing; x<canvas.width; x+=spacing){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
+      // horizontal lines
+      for(let y=origin.y % spacing; y<canvas.height; y+=spacing){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
+      // axes at cue ball
+      ctx.strokeStyle='#fff'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(origin.x,0); ctx.lineTo(origin.x,canvas.height); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,origin.y); ctx.lineTo(canvas.width,origin.y); ctx.stroke();
+      // numbers
+      for(let dx=-Math.floor(origin.x/spacing); dx<Math.ceil((canvas.width-origin.x)/spacing); dx++){
+        const xPos = origin.x + dx*spacing;
+        ctx.fillText((dx).toString(), xPos+2, origin.y-4);
+      }
+      for(let dy=-Math.floor(origin.y/spacing); dy<Math.ceil((canvas.height-origin.y)/spacing); dy++){
+        const yPos = origin.y + dy*spacing;
+        if(dy!==0) ctx.fillText(((-dy)).toString(), origin.x+4, yPos-2);
+      }
+      ctx.restore();
+    }
+
+    function drawArm() {
+      const origin = balls[0];
+      ctx.save();
+      ctx.strokeStyle='#fff'; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.moveTo(origin.x, origin.y);
+      ctx.lineTo(origin.x + armVector.x, origin.y + armVector.y);
+      ctx.stroke();
+      // arrow head
+      const angle = Math.atan2(armVector.y, armVector.x);
+      const headLen = 10;
+      ctx.beginPath();
+      ctx.moveTo(origin.x + armVector.x, origin.y + armVector.y);
+      ctx.lineTo(origin.x + armVector.x - headLen * Math.cos(angle - Math.PI/6), origin.y + armVector.y - headLen * Math.sin(angle - Math.PI/6));
+      ctx.lineTo(origin.x + armVector.x - headLen * Math.cos(angle + Math.PI/6), origin.y + armVector.y - headLen * Math.sin(angle + Math.PI/6));
+      ctx.closePath(); ctx.fillStyle='#fff'; ctx.fill();
+      ctx.restore();
+    }
+
+    function drawBall(b) {
+      ctx.save(); ctx.beginPath(); ctx.arc(b.x,b.y,ballRadius,0,2*Math.PI);
+      ctx.fillStyle = b.number===0 ? b.color : (b.isStripe ? '#fff' : b.color);
+      ctx.fill();
+      if(b.isStripe) {
+        ctx.beginPath(); ctx.rect(b.x-ballRadius, b.y-ballRadius/3, 2*ballRadius, 2*ballRadius/3);
+        ctx.clip(); ctx.beginPath(); ctx.arc(b.x,b.y,ballRadius,0,2*Math.PI); ctx.fillStyle=b.color; ctx.fill();
+      }
+      ctx.strokeStyle='#000'; ctx.lineWidth=1; ctx.stroke();
+      if(b.number>0) {
+        ctx.beginPath(); ctx.arc(b.x,b.y,ballRadius*0.5,0,2*Math.PI);
+        ctx.fillStyle='#fff'; ctx.fill(); ctx.fillStyle='#000';
+        ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(b.number,b.x,b.y);
+      }
+      ctx.restore();
+    }
+
+    function animateShot() {
+      const step = () => {
+        balls = balls.filter(b => !pockets.some(p => Math.hypot(b.x-p.x,b.y-p.y) < p.r));
+        let moving = false;
+        balls.forEach(b => {
+          const speed = Math.hypot(b.vx,b.vy);
+          if(speed>0.01) {
+            moving = true;
+            b.x += b.vx; b.y += b.vy;
+            b.vx *= (1 - b.friction); b.vy *= (1 - b.friction);
+            if(b.x<ballRadius||b.x>canvas.width-ballRadius) b.vx*=-1;
+            if(b.y<ballRadius||b.y>canvas.height-ballRadius) b.vy*=-1;
+          }
+        });
+        for(let i=0;i<balls.length;i++) for(let j=i+1;j<balls.length;j++) collide(balls[i],balls[j]);
+        drawTable();
+        if(moving) requestAnimationFrame(step);
+        else {
+          showGrid = false; showArm = false;
+          showSolution();
+        }
+      };
+      requestAnimationFrame(step);
+    }
+
+    function collide(b1,b2) {
+      const dx=b2.x-b1.x, dy=b2.y-b1.y, dist=Math.hypot(dx,dy);
+      if(dist<2*ballRadius) {
+        const ang=Math.atan2(dy,dx), sin=Math.sin(ang), cos=Math.cos(ang);
+        let v1={x:b1.vx*cos+b1.vy*sin, y:b1.vy*cos-b1.vx*sin};
+        let v2={x:b2.vx*cos+b2.vy*sin, y:b2.vy*cos-b2.vx*sin};
+        [v1.x,v2.x]=[v2.x,v1.x];
+        b1.vx=v1.x*cos - v1.y*sin; b1.vy=v1.x*sin + v1.y*cos;
+        b2.vx=v2.x*cos - v2.y*sin; b2.vy=v2.x*sin + v2.y*cos;
+      }
+    }
+
+    function showSolution() {
+      document.getElementById('solutionOverlay').style.display = 'block';
+      solCtx.clearRect(0,0,800,400);
+      const b = balls[0] || {x:100,y:canvas.height/2};
+      solCtx.strokeStyle='#fff'; solCtx.beginPath(); solCtx.moveTo(b.x-50,b.y); solCtx.lineTo(b.x+50,b.y);
+      solCtx.moveTo(b.x,b.y-50); solCtx.lineTo(b.x,b.y+50); solCtx.stroke();
+      document.getElementById('solutionText').innerHTML = '<p>Shot complete. Click Continue.</p>';
+    }
+
+    function hideSolution() {
+      document.getElementById('solutionOverlay').style.display='none';
+      nextTurn(); drawTable();
+    }
+
+    function hideError() {
+      document.getElementById('errorOverlay').style.display='none';
+      nextTurn(); drawTable();
+    }
+
+    function nextTurn() {
+      currentPlayer = currentPlayer===1?2:1;
+      document.getElementById('playerLabel').textContent = currentPlayer;
+    }
+  </script>
+</body>
+</html>
