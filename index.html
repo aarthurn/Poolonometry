@@ -1,4 +1,14 @@
 <!DOCTYPE html>
+<!-- 
+  Enhanced Pool Game Physics - Updated 2025-05-14 19:03:37 UTC
+  Changes by GitHub Copilot:
+  - Improved rolling physics for more realistic ball movement
+  - More granular friction control with value display
+  - Disabled shooting during ball motion
+  - Cue ball return functionality
+  - Added missing exact trig values (1/√3, √3)
+  - Original game by aarthurn
+-->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -32,6 +42,13 @@
       position: absolute; top: 20px; left: 20px; text-align: left;
     }
     button { padding: 6px 12px; margin: 6px; }
+    button:disabled { opacity: 0.5; }
+    .slider-value { 
+      display: inline-block; 
+      min-width: 60px; 
+      font-family: monospace; 
+      margin-left: 5px; 
+    }
   </style>
 </head>
 <body>
@@ -50,16 +67,18 @@
     <select id="ratioValueSelect">
       <option value="0" selected>0</option>
       <option value="decimal">Enter decimal...</option>
+      <option value="-1.7320508075688772">-√3</option>
       <option value="-1">-1</option>
       <option value="-0.8660254037844386">-√3/2</option>
       <option value="-0.7071067811865475">-√2/2</option>
-      <option value="-0.7071067811865475">-1/√2</option>
+      <option value="-0.5773502691896257">-1/√3</option>
       <option value="-0.5">-1/2</option>
       <option value="0.5">1/2</option>
+      <option value="0.5773502691896257">1/√3</option>
       <option value="0.7071067811865476">√2/2</option>
-      <option value="0.7071067811865476">1/√2</option>
       <option value="0.8660254037844386">√3/2</option>
       <option value="1">1</option>
+      <option value="1.7320508075688772">√3</option>
     </select>
     <input type="number" id="decimalInput" placeholder="Decimal" style="display:none;width:60px;" step="0.01" />
     <select id="quadrantSelect">
@@ -68,8 +87,13 @@
       <option value="3">Quadrant III</option>
       <option value="4">Quadrant IV</option>
     </select>
+    <br>
     Power: <input type="range" id="powerSlider" min="1" max="16" step="1" value="5" />
-    Friction: <input type="range" id="frictionSlider" min="0.005" max="0.025" step="0.005" value="0.01" />
+    <span id="powerValue" class="slider-value">5.0</span>
+    <br>
+    Friction: <input type="range" id="frictionSlider" min="0.001" max="0.025" step="0.001" value="0.01" />
+    <span id="frictionValue" class="slider-value">0.010</span>
+    <br>
     <button id="analyzeBtn">Analyze Path</button>
     <button id="shootBtn">Shoot</button>
   </div>
@@ -94,6 +118,15 @@
     const ballRadius = 10;
     let showGrid = false, showArm = false;
     let armVector = { x: 0, y: 0 };
+    let isMoving = false; // Track if any balls are in motion
+    const INITIAL_CUE_X = 100;
+    const INITIAL_CUE_Y = 200;
+    
+    // Physics constants
+    const ROLLING_THRESHOLD = 0.5;  // Speed at which rolling friction takes over
+    const STATIC_FRICTION_MULTIPLIER = 2.5;  // Increased friction at low speeds
+    const MINIMUM_SPEED = 0.01;  // Speed below which balls stop completely
+
     const pockets = [
       { x: 0, y: 0, r: cornerPocketRadius },
       { x: 400, y: 0, r: sidePocketRadius },
@@ -102,13 +135,73 @@
       { x: 400, y: 400, r: sidePocketRadius },
       { x: 800, y: 400, r: cornerPocketRadius }
     ];
-    const ballColors = {1:'#FFFF00',2:'#0000FF',3:'#FF0000',4:'#800080',5:'#FFA500',6:'#008000',7:'#800000',8:'#000000',9:'#FFFF00',10:'#0000FF',11:'#FF0000',12:'#800080',13:'#FFA500',14:'#008000',15:'#800000'};
 
+    const ballColors = {
+      1:'#FFFF00',2:'#0000FF',3:'#FF0000',4:'#800080',5:'#FFA500',
+      6:'#008000',7:'#800000',8:'#000000',9:'#FFFF00',10:'#0000FF',
+      11:'#FF0000',12:'#800080',13:'#FFA500',14:'#008000',15:'#800000'
+    };
+
+    // Event Listeners
     document.getElementById('ratioValueSelect').addEventListener('change', e => {
       document.getElementById('decimalInput').style.display = e.target.value === 'decimal' ? 'inline' : 'none';
     });
     document.getElementById('analyzeBtn').addEventListener('click', analyzePath);
-    document.getElementById('shootBtn').addEventListener('click', () => { showGrid = false; showArm = false; handleShoot(); });
+    document.getElementById('shootBtn').addEventListener('click', () => {
+      if (!isMoving) {
+        showGrid = false;
+        showArm = false;
+        handleShoot();
+      }
+    });
+
+    // Slider value display updates
+    document.getElementById('powerSlider').addEventListener('input', e => {
+      document.getElementById('powerValue').textContent = e.target.value;
+    });
+    document.getElementById('frictionSlider').addEventListener('input', e => {
+      document.getElementById('frictionValue').textContent = e.target.value.padStart(5, '0');
+    });
+
+    function findClearSpot(x, y) {
+      // Spiral search for a clear spot
+      let angle = 0;
+      let radius = 0;
+      const step = Math.PI / 8;
+      const radiusStep = ballRadius;
+      
+      while (radius < canvas.width / 2) {
+        const testX = x + radius * Math.cos(angle);
+        const testY = y + radius * Math.sin(angle);
+        
+        // Check if position is valid
+        if (testX >= ballRadius && testX <= canvas.width - ballRadius &&
+            testY >= ballRadius && testY <= canvas.height - ballRadius) {
+          
+          // Check for collision with other balls
+          let isClear = true;
+          for (const ball of balls) {
+            if (Math.hypot(ball.x - testX, ball.y - testY) < 2.2 * ballRadius) {
+              isClear = false;
+              break;
+            }
+          }
+          
+          if (isClear) {
+            return { x: testX, y: testY };
+          }
+        }
+        
+        angle += step;
+        if (angle >= 2 * Math.PI) {
+          angle = 0;
+          radius += radiusStep;
+        }
+      }
+      
+      // If no spot found, return initial position
+      return { x: INITIAL_CUE_X, y: INITIAL_CUE_Y };
+    }
 
     function computeTheta() {
       const type = document.getElementById('ratioTypeSelect').value;
@@ -130,9 +223,9 @@
     }
 
     function analyzePath() {
+      if (isMoving) return;
       const theta = computeTheta();
       if (theta === null) return;
-      // Show grid and arm: arrow length 100px
       showGrid = true;
       armVector.x = Math.cos(theta) * 100;
       armVector.y = -Math.sin(theta) * 100;
@@ -141,27 +234,19 @@
     }
 
     function handleShoot() {
-      const ratioType = document.getElementById('ratioTypeSelect').value;
-      const valSel = document.getElementById('ratioValueSelect').value;
-      const val = valSel === 'decimal' ? parseFloat(document.getElementById('decimalInput').value) : parseFloat(valSel);
-      if (isNaN(val)) return;
-      const quad = parseInt(document.getElementById('quadrantSelect').value, 10);
+      if (isMoving) return;
+      const theta = computeTheta();
+      if (theta === null) return;
+      
       const power = parseFloat(document.getElementById('powerSlider').value) * 0.8;
-      const friction = parseFloat(document.getElementById('frictionSlider').value) * 0.85;
-      const raw = ['csc','sec','cot'].includes(ratioType) ? 1/val : val;
-      // CAST rule omitted; assume valid
-      const absVal = Math.abs(raw);
-      let theta = /sin|csc/.test(ratioType) ? Math.asin(absVal)
-                 : /cos|sec/.test(ratioType) ? Math.acos(absVal)
-                 : Math.atan(absVal);
-      switch (quad) {
-        case 2: theta = Math.PI - theta; break;
-        case 3: theta = Math.PI + theta; break;
-        case 4: theta = 2*Math.PI - theta; break;
-      }
+      const friction = parseFloat(document.getElementById('frictionSlider').value);
+      
       balls[0].vx = Math.cos(theta) * power;
       balls[0].vy = Math.sin(-theta) * power;
       balls.forEach(b => b.friction = friction);
+      
+      document.getElementById('shootBtn').disabled = true;
+      isMoving = true;
       animateShot();
     }
 
@@ -177,7 +262,7 @@
     function shuffle(arr) { return arr.sort(() => Math.random()-0.5); }
 
     function initBalls() {
-      balls = [{ x:100, y:canvas.height/2, vx:0, vy:0, mass:1, number:0, color:'#fff', friction:0 }];
+      balls = [{ x:INITIAL_CUE_X, y:INITIAL_CUE_Y, vx:0, vy:0, mass:1, number:0, color:'#fff', friction:0 }];
       const sx = 500, sy = canvas.height/2;
       const pattern = gameType==='8-ball' ? [1,2,3,4,5] : [1,2,3,2,1];
       const nums = shuffle(gameType==='8-ball' ? [1,2,3,4,5,6,7,9,10,11,12,13,14,15] : [1,2,3,4,5,6,7,8]);
@@ -204,15 +289,11 @@
       ctx.save();
       ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1;
       ctx.font='12px sans-serif'; ctx.fillStyle='#fff';
-      // vertical lines
       for(let x=origin.x % spacing; x<canvas.width; x+=spacing){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
-      // horizontal lines
       for(let y=origin.y % spacing; y<canvas.height; y+=spacing){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
-      // axes at cue ball
       ctx.strokeStyle='#fff'; ctx.lineWidth=2;
       ctx.beginPath(); ctx.moveTo(origin.x,0); ctx.lineTo(origin.x,canvas.height); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(0,origin.y); ctx.lineTo(canvas.width,origin.y); ctx.stroke();
-      // numbers
       for(let dx=-Math.floor(origin.x/spacing); dx<Math.ceil((canvas.width-origin.x)/spacing); dx++){
         const xPos = origin.x + dx*spacing;
         ctx.fillText((dx).toString(), xPos+2, origin.y-4);
@@ -231,7 +312,6 @@
       ctx.beginPath(); ctx.moveTo(origin.x, origin.y);
       ctx.lineTo(origin.x + armVector.x, origin.y + armVector.y);
       ctx.stroke();
-      // arrow head
       const angle = Math.atan2(armVector.y, armVector.x);
       const headLen = 10;
       ctx.beginPath();
@@ -260,64 +340,162 @@
       ctx.restore();
     }
 
+    function collide(b1, b2) {
+      const dx = b2.x - b1.x;
+      const dy = b2.y - b1.y;
+      const dist = Math.hypot(dx, dy);
+      
+      if (dist < 2 * ballRadius) {
+        // Separate overlapping balls
+        const overlap = 2 * ballRadius - dist;
+        if (dist > 0) {
+          const separationX = (dx / dist) * overlap * 0.5;
+          const separationY = (dy / dist) * overlap * 0.5;
+          
+          b1.x -= separationX;
+          b1.y -= separationY;
+          b2.x += separationX;
+          b2.y += separationY;
+        }
+
+        // Calculate collision response
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const vRelativeX = b2.vx - b1.vx;
+        const vRelativeY = b2.vy - b1.vy;
+        const vRelativeNormal = vRelativeX * nx + vRelativeY * ny;
+        
+        // Only collide if balls are moving toward each other
+        if (vRelativeNormal > 0) return;
+
+        const restitution = 0.95;
+        const j = -(1 + restitution) * vRelativeNormal;
+
+        const impulseX = j * nx;
+        const impulseY = j * ny;
+
+        b1.vx -= impulseX * 0.5;
+        b1.vy -= impulseY * 0.5;
+        b2.vx += impulseX * 0.5;
+        b2.vy += impulseY * 0.5;
+      }
+    }
+
     function animateShot() {
       const step = () => {
-        balls = balls.filter(b => !pockets.some(p => Math.hypot(b.x-p.x,b.y-p.y) < p.r));
         let moving = false;
+        
+        // Check for pocketed cue ball
+        const cueBall = balls.find(b => b.number === 0);
+        if (cueBall && pockets.some(p => Math.hypot(cueBall.x-p.x, cueBall.y-p.y) < p.r)) {
+          // Find new valid position for cue ball
+          const newPos = findClearSpot(INITIAL_CUE_X, INITIAL_CUE_Y);
+          cueBall.x = newPos.x;
+          cueBall.y = newPos.y;
+          cueBall.vx = 0;
+          cueBall.vy = 0;
+        }
+        
+        // Remove other pocketed balls
+        balls = balls.filter(b => b.number === 0 || !pockets.some(p => Math.hypot(b.x-p.x, b.y-p.y) < p.r));
+        
+        // Update positions and apply friction
         balls.forEach(b => {
-          const speed = Math.hypot(b.vx,b.vy);
-          if(speed>0.01) {
+          const speed = Math.hypot(b.vx, b.vy);
+          if (speed > MINIMUM_SPEED) {
             moving = true;
-            b.x += b.vx; b.y += b.vy;
-            b.vx *= (1 - b.friction); b.vy *= (1 - b.friction);
-            if(b.x<ballRadius||b.x>canvas.width-ballRadius) b.vx*=-1;
-            if(b.y<ballRadius||b.y>canvas.height-ballRadius) b.vy*=-1;
+            
+            // Update position
+            b.x += b.vx;
+            b.y += b.vy;
+            
+            // Apply appropriate friction based on speed
+            const frictionMultiplier = speed < ROLLING_THRESHOLD ? 
+              STATIC_FRICTION_MULTIPLIER : 1;
+            
+            const frictionFactor = 1 - (b.friction * frictionMultiplier);
+            b.vx *= frictionFactor;
+            b.vy *= frictionFactor;
+
+            // Stop ball if moving very slowly
+            if (Math.hypot(b.vx, b.vy) < MINIMUM_SPEED) {
+              b.vx = 0;
+              b.vy = 0;
+            }
+
+            // Boundary collisions with energy loss
+            if (b.x < ballRadius) {
+              b.x = ballRadius;
+              b.vx *= -0.95;
+            } else if (b.x > canvas.width - ballRadius) {
+              b.x = canvas.width - ballRadius;
+              b.vx *= -0.95;
+            }
+            
+            if (b.y < ballRadius) {
+              b.y = ballRadius;
+              b.vy *= -0.95;
+            } else if (b.y > canvas.height - ballRadius) {
+              b.y = canvas.height - ballRadius;
+              b.vy *= -0.95;
+            }
           }
         });
-        for(let i=0;i<balls.length;i++) for(let j=i+1;j<balls.length;j++) collide(balls[i],balls[j]);
+
+        // Handle collisions with multiple iterations
+        const iterations = 3;
+        for (let iter = 0; iter < iterations; iter++) {
+          for (let i = 0; i < balls.length; i++) {
+            for (let j = i + 1; j < balls.length; j++) {
+              collide(balls[i], balls[j]);
+            }
+          }
+        }
+
         drawTable();
-        if(moving) requestAnimationFrame(step);
-        else {
-          showGrid = false; showArm = false;
+        
+        if (moving) {
+          requestAnimationFrame(step);
+        } else {
+          isMoving = false;
+          document.getElementById('shootBtn').disabled = false;
+          showGrid = false;
+          showArm = false;
           showSolution();
         }
       };
+      
       requestAnimationFrame(step);
-    }
-
-    function collide(b1,b2) {
-      const dx=b2.x-b1.x, dy=b2.y-b1.y, dist=Math.hypot(dx,dy);
-      if(dist<2*ballRadius) {
-        const ang=Math.atan2(dy,dx), sin=Math.sin(ang), cos=Math.cos(ang);
-        let v1={x:b1.vx*cos+b1.vy*sin, y:b1.vy*cos-b1.vx*sin};
-        let v2={x:b2.vx*cos+b2.vy*sin, y:b2.vy*cos-b2.vx*sin};
-        [v1.x,v2.x]=[v2.x,v1.x];
-        b1.vx=v1.x*cos - v1.y*sin; b1.vy=v1.x*sin + v1.y*cos;
-        b2.vx=v2.x*cos - v2.y*sin; b2.vy=v2.x*sin + v2.y*cos;
-      }
     }
 
     function showSolution() {
       document.getElementById('solutionOverlay').style.display = 'block';
       solCtx.clearRect(0,0,800,400);
-      const b = balls[0] || {x:100,y:canvas.height/2};
-      solCtx.strokeStyle='#fff'; solCtx.beginPath(); solCtx.moveTo(b.x-50,b.y); solCtx.lineTo(b.x+50,b.y);
-      solCtx.moveTo(b.x,b.y-50); solCtx.lineTo(b.x,b.y+50); solCtx.stroke();
+      const b = balls[0] || {x:INITIAL_CUE_X, y:INITIAL_CUE_Y};
+      solCtx.strokeStyle='#fff';
+      solCtx.beginPath();
+      solCtx.moveTo(b.x-50,b.y);
+      solCtx.lineTo(b.x+50,b.y);
+      solCtx.moveTo(b.x,b.y-50);
+      solCtx.lineTo(b.x,b.y+50);
+      solCtx.stroke();
       document.getElementById('solutionText').innerHTML = '<p>Shot complete. Click Continue.</p>';
     }
 
     function hideSolution() {
-      document.getElementById('solutionOverlay').style.display='none';
-      nextTurn(); drawTable();
+      document.getElementById('solutionOverlay').style.display = 'none';
+      nextTurn();
+      drawTable();
     }
 
     function hideError() {
-      document.getElementById('errorOverlay').style.display='none';
-      nextTurn(); drawTable();
+      document.getElementById('errorOverlay').style.display = 'none';
+      nextTurn();
+      drawTable();
     }
 
     function nextTurn() {
-      currentPlayer = currentPlayer===1?2:1;
+      currentPlayer = currentPlayer === 1 ? 2 : 1;
       document.getElementById('playerLabel').textContent = currentPlayer;
     }
   </script>
