@@ -551,14 +551,13 @@
       solCtx.stroke();
 
       const headLen = 10; // Arrow head length
-      const arrowAngle = Math.atan2(originBall.y - endY, endX - originBall.x); // Angle of the arm itself
+      const arrowAngle = Math.atan2(endY - originBall.y, endX - originBall.x); // Angle of the arm itself
 
       solCtx.beginPath();
       solCtx.moveTo(endX, endY);
       solCtx.lineTo(endX - headLen * Math.cos(arrowAngle - Math.PI / 6), endY - headLen * Math.sin(arrowAngle - Math.PI / 6));
       solCtx.lineTo(endX - headLen * Math.cos(arrowAngle + Math.PI / 6), endY - headLen * Math.sin(arrowAngle + Math.PI / 6));
       solCtx.closePath(); solCtx.fill();
-      solCtx.restore();
     }
 
     function drawAngleArcAndText(shotData, angleToDraw) {
