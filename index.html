@@ -25,7 +25,7 @@
       padding: 10px; border-radius: 8px; display: none;
     }
     #tableContainer {
-      width: 800px; height: 400px; margin: 120px auto 0;
+      width: 800px; height: 400px; margin: 220px auto 0;
       border: 20px solid #8B4513; border-radius: 30px;
       background: #8B4513; position: relative; z-index: 1;
     }
@@ -96,14 +96,15 @@
     <br>
     <button id="analyzeBtn">Analyze Path</button>
     <button id="shootBtn">Shoot</button>
+    <button id="toggleAnimationBtn">Animated Solutions: ON</button>
   </div>
   <div id="tableContainer">
     <canvas id="tableCanvas" width="800" height="400"></canvas>
-  </div>
-  <div id="solutionOverlay">
-    <canvas id="solutionCanvas" width="800" height="400"></canvas>
-    <div id="solutionText"></div>
-    <button onclick="hideSolution()">Continue</button>
+    <div id="solutionOverlay">
+      <canvas id="solutionCanvas" width="800" height="400"></canvas>
+      <div id="solutionText"></div>
+      <button onclick="hideSolution()">Continue</button>
+    </div>
   </div>
   <div id="errorOverlay">
     <div id="errorText"></div>
@@ -119,6 +120,10 @@
     let showGrid = false, showArm = false;
     let armVector = { x: 0, y: 0 };
     let isMoving = false; // Track if any balls are in motion
+    let cueBallPocketedDuringShot = false;
+    let animatedSolutionsEnabled = true;
+    let initialShotData = {};
+    let nonCueBallsForSolution = [];
     const INITIAL_CUE_X = 100;
     const INITIAL_CUE_Y = 200;
     
@@ -154,6 +159,10 @@
         handleShoot();
       }
     });
+  document.getElementById('toggleAnimationBtn').addEventListener('click', () => {
+    animatedSolutionsEnabled = !animatedSolutionsEnabled;
+    document.getElementById('toggleAnimationBtn').textContent = `Animated Solutions: ${animatedSolutionsEnabled ? 'ON' : 'OFF'}`;
+  });
 
     // Slider value display updates
     document.getElementById('powerSlider').addEventListener('input', e => {
@@ -235,8 +244,22 @@
 
     function handleShoot() {
       if (isMoving) return;
+      cueBallPocketedDuringShot = false; // Reset flag for the new shot
       const theta = computeTheta();
       if (theta === null) return;
+
+      // Store initial shot data for solution animation
+      const ratioValueSelect = document.getElementById('ratioValueSelect');
+      initialShotData = {
+        cueX: balls[0].x,
+        cueY: balls[0].y,
+        ratioType: document.getElementById('ratioTypeSelect').value,
+        ratioValueString: ratioValueSelect.value,
+        ratioValueNumeric: ratioValueSelect.value === 'decimal' ? parseFloat(document.getElementById('decimalInput').value) : parseFloat(ratioValueSelect.value),
+        quadrant: parseInt(document.getElementById('quadrantSelect').value, 10),
+        unit: document.getElementById('unitSelect').value,
+        actualTheta: theta
+      };
       
       const power = parseFloat(document.getElementById('powerSlider').value) * 0.8;
       const friction = parseFloat(document.getElementById('frictionSlider').value);
@@ -385,19 +408,17 @@
       const step = () => {
         let moving = false;
         
-        // Check for pocketed cue ball
-        const cueBall = balls.find(b => b.number === 0);
-        if (cueBall && pockets.some(p => Math.hypot(cueBall.x-p.x, cueBall.y-p.y) < p.r)) {
-          // Find new valid position for cue ball
-          const newPos = findClearSpot(INITIAL_CUE_X, INITIAL_CUE_Y);
-          cueBall.x = newPos.x;
-          cueBall.y = newPos.y;
-          cueBall.vx = 0;
-          cueBall.vy = 0;
-        }
-        
-        // Remove other pocketed balls
-        balls = balls.filter(b => b.number === 0 || !pockets.some(p => Math.hypot(b.x-p.x, b.y-p.y) < p.r));
+        // Check for and remove pocketed balls
+        balls = balls.filter(b => {
+          const isPocketed = pockets.some(p => Math.hypot(b.x - p.x, b.y - p.y) < p.r);
+          if (isPocketed) {
+            if (b.number === 0) {
+              cueBallPocketedDuringShot = true;
+            }
+            return false; // Remove pocketed ball
+          }
+          return true; // Keep non-pocketed ball
+        });
         
         // Update positions and apply friction
         balls.forEach(b => {
@@ -457,10 +478,21 @@
         if (moving) {
           requestAnimationFrame(step);
         } else {
+          // All balls have stopped moving
           isMoving = false;
           document.getElementById('shootBtn').disabled = false;
           showGrid = false;
           showArm = false;
+
+          if (cueBallPocketedDuringShot) {
+            const newPos = findClearSpot(INITIAL_CUE_X, INITIAL_CUE_Y);
+            balls.unshift({ // Add cue ball back to the beginning of the array
+              x: newPos.x, y: newPos.y, vx: 0, vy: 0, mass: 1, number: 0, color: '#fff', friction: 0
+            });
+            cueBallPocketedDuringShot = false; // Reset the flag
+          }
+          
+          drawTable(); // Re-draw table in case cue ball was re-added
           showSolution();
         }
       };
@@ -468,28 +500,281 @@
       requestAnimationFrame(step);
     }
 
+    // --- Solution Animation Helper Functions ---
+
+    function drawSolutionCueBallMarker(ball) {
+        solCtx.strokeStyle = '#fff';
+        solCtx.lineWidth = 1;
+        solCtx.beginPath();
+        solCtx.moveTo(ball.x - 10, ball.y); solCtx.lineTo(ball.x + 10, ball.y);
+        solCtx.moveTo(ball.x, ball.y - 10); solCtx.lineTo(ball.x, ball.y + 10);
+        solCtx.stroke();
+    }
+
+    function drawBallOnSolutionCanvas(ball) {
+      solCtx.save();
+      solCtx.beginPath(); solCtx.arc(ball.x, ball.y, ballRadius, 0, 2 * Math.PI);
+      solCtx.fillStyle = ball.number === 0 ? ball.color : (ball.isStripe ? '#fff' : ball.color); // Simplified from original drawBall
+      solCtx.fill();
+      solCtx.strokeStyle = '#333'; solCtx.lineWidth = 1; solCtx.stroke(); // Darker stroke for solution canvas
+      // Number/stripe details omitted for solution animation clarity, can be added if needed
+      solCtx.restore();
+    }
+
+    function drawGridOnSolutionCanvas(originBall) {
+      const spacing = 25;
+      solCtx.save();
+      solCtx.strokeStyle = 'rgba(255,255,255,0.15)'; solCtx.lineWidth = 1; // Dimmer grid for solution
+      solCtx.font = '10px sans-serif'; solCtx.fillStyle = 'rgba(255,255,255,0.5)';
+
+      for (let x = originBall.x % spacing; x < solCanvas.width; x += spacing) { solCtx.beginPath(); solCtx.moveTo(x, 0); solCtx.lineTo(x, solCanvas.height); solCtx.stroke(); }
+      for (let y = originBall.y % spacing; y < solCanvas.height; y += spacing) { solCtx.beginPath(); solCtx.moveTo(0, y); solCtx.lineTo(solCanvas.width, y); solCtx.stroke(); }
+      
+      solCtx.strokeStyle = 'rgba(255,255,255,0.3)'; solCtx.lineWidth = 1.5; // Dimmer axis lines
+      solCtx.beginPath(); solCtx.moveTo(originBall.x, 0); solCtx.lineTo(originBall.x, solCanvas.height); solCtx.stroke();
+      solCtx.beginPath(); solCtx.moveTo(0, originBall.y); solCtx.lineTo(solCanvas.width, originBall.y); solCtx.stroke();
+      // Grid labels omitted for solution animation clarity
+      solCtx.restore();
+    }
+
+    function drawArmOnSolutionCanvas(originBall, angle, alpha, color = '#fff', length = 100) {
+      solCtx.save();
+      solCtx.globalAlpha = alpha;
+      solCtx.strokeStyle = color; solCtx.fillStyle = color;
+      solCtx.lineWidth = 3;
+      
+      const endX = originBall.x + Math.cos(angle) * length;
+      const endY = originBall.y - Math.sin(angle) * length; // Y is inverted in canvas coordinates
+
+      solCtx.beginPath(); solCtx.moveTo(originBall.x, originBall.y);
+      solCtx.lineTo(endX, endY);
+      solCtx.stroke();
+
+      const headLen = 10; // Arrow head length
+      const arrowAngle = Math.atan2(originBall.y - endY, endX - originBall.x); // Angle of the arm itself
+
+      solCtx.beginPath();
+      solCtx.moveTo(endX, endY);
+      solCtx.lineTo(endX - headLen * Math.cos(arrowAngle - Math.PI / 6), endY - headLen * Math.sin(arrowAngle - Math.PI / 6));
+      solCtx.lineTo(endX - headLen * Math.cos(arrowAngle + Math.PI / 6), endY - headLen * Math.sin(arrowAngle + Math.PI / 6));
+      solCtx.closePath(); solCtx.fill();
+      solCtx.restore();
+    }
+
+    function drawAngleArcAndText(shotData, angleToDraw) {
+      const origin = { x: shotData.cueX, y: shotData.cueY };
+      solCtx.save();
+      solCtx.strokeStyle = '#ffff00'; solCtx.lineWidth = 2;
+      solCtx.beginPath();
+      // Ensure CCW arc: startAngle 0, endAngle -angle (because canvas Y is inverted)
+      solCtx.arc(origin.x, origin.y, 40, 2*Math.PI -angleToDraw, 0, false); // Draw CCW
+      solCtx.stroke();
+
+      let angleText = "";
+      const pi = Math.PI;
+      const commonAnglesRad = {
+          0: "0", [pi/6]: "π/6", [pi/4]: "π/4", [pi/3]: "π/3", [pi/2]: "π/2", [2*pi/3]: "2π/3",
+          [3*pi/4]: "3π/4", [5*pi/6]: "5π/6", [pi]: "π", [7*pi/6]: "7π/6", [5*pi/4]: "5π/4",
+          [4*pi/3]: "4π/3", [3*pi/2]: "3π/2", [5*pi/3]: "5π/3", [7*pi/4]: "7π/4", [11*pi/6]: "11π/6", [2*pi]: "2π"
+      };
+      let normalizedAngle = (angleToDraw % (2*pi) + (2*pi)) % (2*pi); // Normalize to 0-2PI
+
+      if (shotData.unit === 'Radians') {
+          let foundExact = false;
+          for (const keyRad in commonAnglesRad) {
+              if (Math.abs(normalizedAngle - parseFloat(keyRad)) < 0.001) {
+                  angleText = commonAnglesRad[keyRad];
+                  foundExact = true; break;
+              }
+          }
+          if (!foundExact) angleText = normalizedAngle.toFixed(2) + " rad";
+      } else {
+          let angleDeg = normalizedAngle * 180 / pi;
+          const commonAnglesDegLookup = {
+              0:"0°",30:"30°",45:"45°",60:"60°",90:"90°",120:"120°",135:"135°",150:"150°",180:"180°",
+              210:"210°",225:"225°",240:"240°",270:"270°",300:"300°",315:"315°",330:"330°",360:"360°"
+          };
+          let foundExactDeg = false;
+          for(const degKey in commonAnglesDegLookup){
+              if(Math.abs(angleDeg - parseFloat(degKey)) < 0.1){
+                  angleText = commonAnglesDegLookup[degKey];
+                  foundExactDeg = true; break;
+              }
+          }
+          if (!foundExactDeg) angleText = angleDeg.toFixed(1) + "°";
+      }
+
+      solCtx.fillStyle = '#ffff00'; solCtx.font = 'bold 16px sans-serif';
+      solCtx.textAlign = 'center'; solCtx.textBaseline = 'middle';
+      const textRadius = 60;
+      const textAngleDraw = angleToDraw / 2; // Midpoint of CCW arc
+      solCtx.fillText(angleText, origin.x + textRadius * Math.cos(textAngleDraw), origin.y - textRadius * Math.sin(textAngleDraw)); // Invert Y for canvas
+      solCtx.restore();
+    }
+
+    function animateCueBallReturn(cueBallInitialWorldPos, targetPos, duration, callback) {
+        let startX = cueBallInitialWorldPos.x;
+        let startY = cueBallInitialWorldPos.y;
+        let startTime = null;
+
+        function step(timestamp) {
+            if (!startTime) startTime = timestamp;
+            let progress = Math.min((timestamp - startTime) / duration, 1);
+            let currentX = startX + (targetPos.x - startX) * progress;
+            let currentY = startY + (targetPos.y - startY) * progress;
+
+            solCtx.clearRect(0, 0, solCanvas.width, solCanvas.height);
+            drawBallOnSolutionCanvas({ x: currentX, y: currentY, number: 0, color: '#fff' });
+
+            if (progress < 1) requestAnimationFrame(step);
+            else callback({x: currentX, y: currentY});
+        }
+        requestAnimationFrame(step);
+    }
+
+    function animateGridFadeIn(cueBallPos, duration, callback) {
+        let startTime = null;
+        function step(timestamp) {
+            if (!startTime) startTime = timestamp;
+            let progress = Math.min((timestamp - startTime) / duration, 1);
+
+            solCtx.clearRect(0, 0, solCanvas.width, solCanvas.height);
+            drawBallOnSolutionCanvas(cueBallPos); // Keep cue ball visible
+            solCtx.globalAlpha = progress;
+            drawGridOnSolutionCanvas(cueBallPos);
+            solCtx.globalAlpha = 1.0;
+
+            if (progress < 1) requestAnimationFrame(step);
+            else callback();
+        }
+        requestAnimationFrame(step);
+    }
+    
+    function getAlternateAngle(theta, ratioType, originalValue) {
+        const pi = Math.PI;
+        let refAngle = 0; // Reference angle in Q1 [0, pi/2]
+        let normalizedTheta = (theta % (2*pi) + (2*pi)) % (2*pi);
+
+        if (normalizedTheta <= pi/2) refAngle = normalizedTheta;
+        else if (normalizedTheta <= pi) refAngle = pi - normalizedTheta;
+        else if (normalizedTheta <= 3*pi/2) refAngle = normalizedTheta - pi;
+        else refAngle = 2*pi - normalizedTheta;
+
+        let altAngle;
+        // Determine the other angle that gives the same *signed* trig value
+        if (/sin|csc/.test(ratioType)) { // sin is positive in Q1, Q2; negative in Q3, Q4
+            altAngle = pi - normalizedTheta;
+        } else if (/cos|sec/.test(ratioType)) { // cos is positive in Q1, Q4; negative in Q2, Q3
+            altAngle = (originalValue >= 0 && (normalizedTheta > pi/2 && normalizedTheta < 3*pi/2)) || (originalValue < 0 && (normalizedTheta < pi/2 || normalizedTheta > 3*pi/2)) ? 2*pi - normalizedTheta : -normalizedTheta;
+             // This needs more robust handling for cos, especially around 0 and PI
+            altAngle = 2*pi - normalizedTheta; // Simpler: other angle with same cos value
+            if (Math.abs(Math.cos(altAngle) - Math.cos(normalizedTheta)) > 0.001) altAngle = -normalizedTheta;
+
+
+        } else { // tan|cot positive in Q1, Q3; negative in Q2, Q4
+            altAngle = normalizedTheta + pi;
+        }
+        return (altAngle % (2*pi) + (2*pi)) % (2*pi); // Normalize
+    }
+
+
+    function animateAngleSolution(shotData, cueBallPos, durationPerStep, callback) {
+        const { actualTheta, ratioType, ratioValueNumeric } = shotData;
+        let otherTheta = getAlternateAngle(actualTheta, ratioType, ratioValueNumeric);
+
+        // Ensure otherTheta is distinct enough for animation, if not, make it same as actualTheta
+        if (Math.abs(otherTheta - actualTheta) < 0.01 || Math.abs(otherTheta - actualTheta - 2*Math.PI) < 0.01 || Math.abs(otherTheta - actualTheta + 2*Math.PI) < 0.01) {
+            otherTheta = actualTheta;
+        }
+        
+        let animState = 0; // 0: show actual, 1: show other, 2: fade other, 3: final display
+        let startTime = null;
+
+        function step(timestamp) {
+            if (!startTime) startTime = timestamp;
+            let elapsed = timestamp - startTime;
+            let progress = Math.min(elapsed / durationPerStep, 1);
+
+            solCtx.clearRect(0, 0, solCanvas.width, solCanvas.height);
+            drawBallOnSolutionCanvas(cueBallPos);
+            drawGridOnSolutionCanvas(cueBallPos);
+
+            switch (animState) {
+                case 0: // Show actualTheta arm
+                    drawArmOnSolutionCanvas(cueBallPos, actualTheta, 1.0, '#00ff00'); // Green for chosen
+                    if (progress >= 1) { animState = 1; startTime = timestamp; progress = 0; }
+                    break;
+                case 1: // Also show otherTheta arm (if different)
+                    drawArmOnSolutionCanvas(cueBallPos, actualTheta, 1.0, '#00ff00');
+                    if (otherTheta !== actualTheta) drawArmOnSolutionCanvas(cueBallPos, otherTheta, progress, '#ff0000'); // Red for other
+                    if (progress >= 1) { animState = 2; startTime = timestamp; progress = 0; }
+                    break;
+                case 2: // Fade out otherTheta arm
+                    drawArmOnSolutionCanvas(cueBallPos, actualTheta, 1.0, '#00ff00');
+                    if (otherTheta !== actualTheta) drawArmOnSolutionCanvas(cueBallPos, otherTheta, 1.0 - progress, '#ff0000');
+                    if (progress >= 1) { animState = 3; startTime = timestamp; progress = 0;}
+                    break;
+                case 3: // Final display: chosen arm, arc, text
+                    drawArmOnSolutionCanvas(cueBallPos, actualTheta, 1.0, '#00ff00');
+                    drawAngleArcAndText(shotData, actualTheta);
+                    callback(); // Animation sequence finished
+                    return;
+            }
+            requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+    }
+
     function showSolution() {
       document.getElementById('solutionOverlay').style.display = 'block';
-      solCtx.clearRect(0,0,800,400);
-      const b = balls[0] || {x:INITIAL_CUE_X, y:INITIAL_CUE_Y};
-      solCtx.strokeStyle='#fff';
-      solCtx.beginPath();
-      solCtx.moveTo(b.x-50,b.y);
-      solCtx.lineTo(b.x+50,b.y);
-      solCtx.moveTo(b.x,b.y-50);
-      solCtx.lineTo(b.x,b.y+50);
-      solCtx.stroke();
-      document.getElementById('solutionText').innerHTML = '<p>Shot complete. Click Continue.</p>';
+      solCtx.clearRect(0, 0, solCanvas.width, solCanvas.height);
+      document.getElementById('solutionText').innerHTML = ''; // Clear previous text
+
+      if (!animatedSolutionsEnabled || !initialShotData.cueX) { // Fallback if no initial data
+        document.getElementById('solutionText').innerHTML = '<p>Shot complete. Click Continue.</p>';
+        const cueBall = balls.find(b => b.number === 0) || { x: INITIAL_CUE_X, y: INITIAL_CUE_Y };
+        drawSolutionCueBallMarker(cueBall);
+        return;
+      }
+
+      // Store non-cue balls and find current cue ball position for animation start
+      nonCueBallsForSolution = balls.filter(b => b.number !== 0).map(b => ({ ...b }));
+      let cueBallForAnimStart = balls.find(b => b.number === 0);
+      if (!cueBallForAnimStart) { // Should be present due to prior logic
+          cueBallForAnimStart = { x: initialShotData.cueX, y: initialShotData.cueY, number: 0, color: '#fff' }; // Fallback
+      }
+      
+      const animCuePos = { x: cueBallForAnimStart.x, y: cueBallForAnimStart.y, number: 0, color: '#fff' };
+      const targetCuePos = { x: initialShotData.cueX, y: initialShotData.cueY };
+
+      animateCueBallReturn(animCuePos, targetCuePos, 700, (returnedCuePos) => {
+        animateGridFadeIn(returnedCuePos, 500, () => {
+          animateAngleSolution(initialShotData, returnedCuePos, 1000, () => {
+            document.getElementById('solutionText').innerHTML = '<p>Analysis complete. Click Continue.</p>';
+          });
+        });
+      });
     }
 
     function hideSolution() {
       document.getElementById('solutionOverlay').style.display = 'none';
+      
+      if (nonCueBallsForSolution.length > 0) {
+        const cueBall = balls.find(b => b.number === 0); // Current cue ball (might be newly placed)
+        balls = cueBall ? [cueBall, ...nonCueBallsForSolution] : [...nonCueBallsForSolution];
+        nonCueBallsForSolution = [];
+      }
+      // If cue ball was pocketed and re-added, it's already in 'balls'.
+      // If not, it's also in 'balls'.
+      // The main concern is restoring the other balls.
+
       nextTurn();
-      drawTable();
+      drawTable(); // Will draw the current state of 'balls'
     }
 
     function hideError() {
       document.getElementById('errorOverlay').style.display = 'none';
+      // Potentially reset something or just allow next turn
       nextTurn();
       drawTable();
     }
@@ -497,6 +782,7 @@
     function nextTurn() {
       currentPlayer = currentPlayer === 1 ? 2 : 1;
       document.getElementById('playerLabel').textContent = currentPlayer;
+      // Reset any shot-specific UI elements if needed here
     }
   </script>
 </body>
