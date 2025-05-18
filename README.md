@@ -1,6 +1,6 @@
 # Poolonometry 🎱📐
 
-A trigonometry learning tool disguised as a pool game! Practice your trigonometric ratios while playing either 8-ball or 9-ball pool.
+A trigonometry learning tool disguised as a pool game! Practice your trigonometric ratios while playing either 8-ball or 9-ball pool.  Try current version at: https://aarthurn.github.io/Poolonometry/
 
 ## Features
 
