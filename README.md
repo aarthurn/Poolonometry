@@ -60,6 +60,7 @@ A trigonometry learning tool disguised as a pool game! Practice your trigonometr
 - **Friction Slider**: Adjust table friction (0.005-0.025)
 - **Analyze Button**: Preview shot trajectory
 - **Shoot Button**: Execute the shot
+- **Ball in Hand**: Move the ball to a desired location with or without the Analysis.
 
 ## Technical Details
 
