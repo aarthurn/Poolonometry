@@ -734,13 +734,17 @@ function placeCueBall(event) {
       solCtx.closePath(); solCtx.fill();
     }
 
-    function drawAngleArcAndText(shotData, angleToDraw) {
+    function drawAngleArcAndText(shotData, angleToDraw, progress = 1) { // Added progress parameter
       const origin = { x: shotData.cueX, y: shotData.cueY };
+      const currentAnimatedAngleValue = angleToDraw * progress;
+
       solCtx.save();
       solCtx.strokeStyle = '#ffff00'; solCtx.lineWidth = 2;
       solCtx.beginPath();
-      // Ensure CCW arc: startAngle 0, endAngle -angle (because canvas Y is inverted)
-      solCtx.arc(origin.x, origin.y, 40, 2*Math.PI -angleToDraw, 0, false); // Draw CCW
+      // Animate the arc drawing based on progress
+      // Arc draws clockwise from (2*PI - anglePortion) to 2*PI (or 0), which is CCW from positive x-axis
+      // Ensure startAngle is less than endAngle for arc. For CCW, startAngle is 2*PI, endAngle is 2*PI - currentAnimatedAngleValue
+      solCtx.arc(origin.x, origin.y, 40, 2*Math.PI - currentAnimatedAngleValue, 2*Math.PI, false);
       solCtx.stroke();
 
       let angleText = "";
@@ -750,15 +754,21 @@ function placeCueBall(event) {
           [3*pi/4]: "3π/4", [5*pi/6]: "5π/6", [pi]: "π", [7*pi/6]: "7π/6", [5*pi/4]: "5π/4",
           [4*pi/3]: "4π/3", [3*pi/2]: "3π/2", [5*pi/3]: "5π/3", [7*pi/4]: "7π/4", [11*pi/6]: "11π/6", [2*pi]: "2π"
       };
-      let normalizedAngle = (angleToDraw % (2*pi) + (2*pi)) % (2*pi); // Normalize to 0-2PI
+      // Normalize the current animated angle for text display
+      let normalizedAngle = (currentAnimatedAngleValue % (2*pi) + (2*pi)) % (2*pi);
 
       if (shotData.unit === 'Radians') {
           let foundExact = false;
-          for (const keyRad in commonAnglesRad) {
-              if (Math.abs(normalizedAngle - parseFloat(keyRad)) < 0.001) {
-                  angleText = commonAnglesRad[keyRad];
-                  foundExact = true; break;
-              }
+          // Check against common radian values, but scale them by progress for exact match during animation
+          // For simplicity in display, we'll show the target common angle if very close to full progress,
+          // otherwise show the numerical value.
+          if (progress > 0.99) { // Check for common angles only when animation is almost complete
+            for (const keyRad in commonAnglesRad) {
+                if (Math.abs(normalizedAngle - parseFloat(keyRad)) < 0.001) {
+                    angleText = commonAnglesRad[keyRad];
+                    foundExact = true; break;
+                }
+            }
           }
           if (!foundExact) angleText = normalizedAngle.toFixed(2) + " rad";
       } else {
@@ -768,11 +778,13 @@ function placeCueBall(event) {
               210:"210°",225:"225°",240:"240°",270:"270°",300:"300°",315:"315°",330:"330°",360:"360°"
           };
           let foundExactDeg = false;
-          for(const degKey in commonAnglesDegLookup){
-              if(Math.abs(angleDeg - parseFloat(degKey)) < 0.1){
-                  angleText = commonAnglesDegLookup[degKey];
-                  foundExactDeg = true; break;
-              }
+          if (progress > 0.99) { // Check for common angles only when animation is almost complete
+            for(const degKey in commonAnglesDegLookup){
+                if(Math.abs(angleDeg - parseFloat(degKey)) < 0.1){
+                    angleText = commonAnglesDegLookup[degKey];
+                    foundExactDeg = true; break;
+                }
+            }
           }
           if (!foundExactDeg) angleText = angleDeg.toFixed(1) + "°";
       }
@@ -780,8 +792,10 @@ function placeCueBall(event) {
       solCtx.fillStyle = '#ffff00'; solCtx.font = 'bold 16px sans-serif';
       solCtx.textAlign = 'center'; solCtx.textBaseline = 'middle';
       const textRadius = 60;
-      const textAngleDraw = angleToDraw / 2; // Midpoint of CCW arc
-      solCtx.fillText(angleText, origin.x + textRadius * Math.cos(textAngleDraw), origin.y - textRadius * Math.sin(textAngleDraw)); // Invert Y for canvas
+      // Position text at the midpoint of the currently drawn arc
+      const textAngleForPlacement = currentAnimatedAngleValue / 2;
+      // For CCW arc from positive x-axis, the angle for text placement is negative in canvas coords
+      solCtx.fillText(angleText, origin.x + textRadius * Math.cos(-textAngleForPlacement), origin.y + textRadius * Math.sin(-textAngleForPlacement));
       solCtx.restore();
     }
 
@@ -863,6 +877,7 @@ function placeCueBall(event) {
         let animState = 0; // 0: show actual, 1: show other, 2: fade other, 3: final display
         let startTime = null;
         let armAngle = 0;
+        // arcProgress will control the animation of the arc and text
         let arcProgress = 0;
     
         function step(timestamp) {
@@ -878,31 +893,37 @@ function placeCueBall(event) {
                 case 0: // Show actualTheta arm
                     armAngle = actualTheta * progress;
                     drawArmOnSolutionCanvas(cueBallPos, armAngle, 1.0, '#00ff00'); // Green for chosen
-                    if (progress >= 1) { animState = 1; startTime = timestamp; progress = 0; armAngle = actualTheta; }
+                    if (progress >= 1) { animState = 1; startTime = timestamp; /* progress resets implicitly */ }
                     break;
                 case 1: // Also show otherTheta arm (if different)
                     drawArmOnSolutionCanvas(cueBallPos, actualTheta, 1.0, '#00ff00');
                     if (otherTheta !== actualTheta) {
-                        armAngle = actualTheta + (otherTheta - actualTheta) * progress;
-                        drawArmOnSolutionCanvas(cueBallPos, armAngle, progress, '#ff0000'); // Red for other
+                        // Animate the appearance of the otherTheta arm
+                        drawArmOnSolutionCanvas(cueBallPos, actualTheta + (otherTheta - actualTheta) * progress, progress, '#ff0000'); // Red for other
                     }
-                    if (progress >= 1) { animState = 2; startTime = timestamp; progress = 0; armAngle = otherTheta; }
+                    if (progress >= 1) { animState = 2; startTime = timestamp; /* progress resets implicitly */ }
                     break;
                 case 2: // Fade out otherTheta arm
                     drawArmOnSolutionCanvas(cueBallPos, actualTheta, 1.0, '#00ff00');
                     if (otherTheta !== actualTheta) {
-                        armAngle = otherTheta;
-                        drawArmOnSolutionCanvas(cueBallPos, armAngle, 1.0 - progress, '#ff0000');
+                        drawArmOnSolutionCanvas(cueBallPos, otherTheta, 1.0 - progress, '#ff0000');
                     }
-                    if (progress >= 1) { animState = 3; startTime = timestamp; progress = 0; arcProgress = 0;}
+                    if (progress >= 1) { animState = 3; startTime = timestamp; arcProgress = 0; /* progress resets implicitly */ }
                     break;
-                case 3: // Final display: chosen arm, arc, text
+                case 3: // Final display: chosen arm, animate arc and text
                     drawArmOnSolutionCanvas(cueBallPos, actualTheta, 1.0, '#00ff00');
-                    // Call the global, correct drawAngleArcAndText function
-                    if (progress >= 1) { // Ensure this runs once the fade-out is complete
-                        drawAngleArcAndText(shotData, actualTheta); // Use the global function
+                    
+                    if (arcProgress < 1) {
+                        // Use elapsed time for arcProgress to make it smooth regardless of durationPerStep for this phase
+                        let arcTimeElapsed = timestamp - startTime;
+                        let arcDuration = 1000; // Duration for arc animation in ms
+                        arcProgress = Math.min(arcTimeElapsed / arcDuration, 1);
+                    }
+                    drawAngleArcAndText(shotData, actualTheta, arcProgress); // Animate arc and text
+
+                    if (arcProgress >= 1) {
                         callback(); // Animation sequence finished
-                        return;
+                        return; // Stop animation loop for this sequence
                     }
                     break;
             }
@@ -910,7 +931,7 @@ function placeCueBall(event) {
         }
         requestAnimationFrame(step);
     }
-    
+
     function showSolution() {
       document.getElementById('solutionOverlay').style.display = 'block';
       solCtx.clearRect(0, 0, solCanvas.width, solCanvas.height);
