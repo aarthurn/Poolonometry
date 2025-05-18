@@ -49,6 +49,35 @@
       font-family: monospace; 
       margin-left: 5px; 
     }
+#infoBox {
+      position: absolute;
+      top: 220px; /* Align with table top */
+      right: 20px; /* Position from the right edge of the viewport */
+      width: auto; /* Let content define width */
+      min-width: 150px; /* Minimum width */
+      padding: 15px;
+      background: rgba(34, 34, 34, 0.85); /* Darker, less transparent background */
+      border: 1px solid #777; /* Slightly more visible border */
+      border-radius: 8px;
+      color: #eee; /* Text color */
+      font-size: 18px; /* Base font size for the box */
+      z-index: 100; /* High z-index for testing visibility */
+      display: none; /* Hide by default */
+    }
+    #infoBox p {
+      margin: 10px 0; /* Spacing between lines */
+      line-height: 1.5;
+    }
+    #infoBox sub {
+      font-size: 0.75em; /* Make subscripts (like in θ₁) smaller */
+      vertical-align: sub;
+      margin-left: -2px; /* Adjust spacing after theta if needed */
+    }
+    #infoBox .value {
+      font-size: 0.9em; /* Make the value part (e.g., "10°") slightly smaller */
+      color: #ccc; /* Slightly dimmer color for the value, like a subtitle */
+      margin-left: 5px; /* Space after the equals sign */
+    }
   </style>
 </head>
 <body>
@@ -113,6 +142,8 @@
   <div id="errorOverlay">
     <div id="errorText"></div>
     <button onclick="hideError()">OK</button>
+  </div>
+<div id="infoBox">
   </div>
   <script>
     let ballInHandMode = false;
@@ -933,13 +964,187 @@ function placeCueBall(event) {
     }
 
     function showSolution() {
+function gcd(a, b) {
+      a = Math.abs(a);
+      b = Math.abs(b);
+      return b === 0 ? a : gcd(b, a % b);
+    }
+
+    function formatAngleForDisplay(angleInDegrees, unit) {
+      if (unit === 'Degrees') {
+        // Remove .0 for whole numbers, keep .x for others
+        const fixed = angleInDegrees.toFixed(1);
+        return (fixed.endsWith('.0') ? fixed.slice(0, -2) : fixed) + "&deg;";
+      } else { // Radians
+        if (angleInDegrees === 0) return "0";
+        
+        let num = Math.round(angleInDegrees); // Use Math.round to handle potential floating point inaccuracies for common angles
+        let den = 180;
+        
+        // Special handling for common fractions that might not simplify perfectly with raw floats
+        // e.g. 30 deg = pi/6, 45 deg = pi/4, 60 deg = pi/3, 90 deg = pi/2 etc.
+        // We can check for these common ones or rely on GCD for simplification.
+        // For now, GCD approach:
+        const commonDivisor = gcd(num, den);
+        num /= commonDivisor;
+        den /= commonDivisor;
+
+        let piStr = "&pi;";
+        if (den === 1) { // Multiple of pi
+          if (num === 1) return piStr;
+          if (num === -1) return "-" + piStr;
+          return num + piStr;
+        } else { // Fraction of pi
+          let numStr = "";
+          if (num === 1) numStr = "";
+          else if (num === -1) numStr = "-";
+          else numStr = num;
+          return numStr + piStr + "/" + den;
+        }
+      }
+    }
+
+    function populateSolutionAnglesBox(shotData, minRangeDeg, maxRangeDeg) {
+      const infoBox = document.getElementById('infoBox');
+      infoBox.innerHTML = ''; // Clear previous content
+
+      if (!shotData || typeof shotData.ratioValueNumeric === 'undefined') {
+        infoBox.innerHTML = '<p>Shot data not available.</p>';
+        return;
+      }
+
+      let { ratioType, ratioValueNumeric, unit } = shotData;
+      let originalRatioType = ratioType; // Keep for messages if needed
+
+      // Handle reciprocal functions
+      if (ratioType === 'csc' || ratioType === 'sec' || ratioType === 'cot') {
+        if (ratioValueNumeric === 0) {
+          infoBox.innerHTML = `<p>No solutions: ${originalRatioType}(&theta;) cannot be 0.</p>`;
+          return;
+        }
+        ratioValueNumeric = 1 / ratioValueNumeric;
+        if (ratioType === 'csc') ratioType = 'sin';
+        else if (ratioType === 'sec') ratioType = 'cos';
+        else if (ratioType === 'cot') ratioType = 'tan';
+      }
+
+      // Validate ratioValueNumeric for sin/cos
+      if ((ratioType === 'sin' || ratioType === 'cos') && Math.abs(ratioValueNumeric) > 1.000001) { // Add small tolerance
+        infoBox.innerHTML = `<p>No real solutions: ${originalRatioType}(&theta;) value out of range [-1, 1].</p>`;
+        return;
+      }
+      // Clamp values that are extremely close to +/-1 due to floating point issues
+      if (ratioType === 'sin' || ratioType === 'cos') {
+        if (Math.abs(ratioValueNumeric - 1) < 0.000001) ratioValueNumeric = 1;
+        if (Math.abs(ratioValueNumeric + 1) < 0.000001) ratioValueNumeric = -1;
+      }
+
+
+      let refAngleRad;
+      const absVal = Math.abs(ratioValueNumeric);
+
+      if (ratioType === 'sin') refAngleRad = Math.asin(absVal);
+      else if (ratioType === 'cos') refAngleRad = Math.acos(absVal);
+      else if (ratioType === 'tan') refAngleRad = Math.atan(absVal);
+      else { // Should not happen if types are validated
+          infoBox.innerHTML = '<p>Invalid trigonometric function type.</p>';
+          return;
+      }
+      
+      if (isNaN(refAngleRad)) {
+          infoBox.innerHTML = '<p>Could not calculate reference angle (invalid value).</p>';
+          return;
+      }
+
+      const principalSolutionsRad = [];
+      if (ratioType === 'sin') {
+        if (ratioValueNumeric >= 0) {
+          principalSolutionsRad.push(refAngleRad);
+          principalSolutionsRad.push(Math.PI - refAngleRad);
+        } else {
+          principalSolutionsRad.push(Math.PI + refAngleRad);
+          principalSolutionsRad.push(2 * Math.PI - refAngleRad);
+        }
+      } else if (ratioType === 'cos') {
+        if (ratioValueNumeric >= 0) {
+          principalSolutionsRad.push(refAngleRad);
+          principalSolutionsRad.push(2 * Math.PI - refAngleRad);
+        } else {
+          principalSolutionsRad.push(Math.PI - refAngleRad);
+          principalSolutionsRad.push(Math.PI + refAngleRad);
+        }
+      } else if (ratioType === 'tan') {
+        // For tan, refAngleRad is based on absVal. We need angle based on actual val.
+        let baseAngleTan = Math.atan(ratioValueNumeric); // This gives angle in (-PI/2, PI/2)
+        principalSolutionsRad.push(baseAngleTan);
+        principalSolutionsRad.push(baseAngleTan + Math.PI);
+        // Normalize to [0, 2PI) for consistency before generating coterminal
+         for(let i=0; i < principalSolutionsRad.length; i++) {
+            while(principalSolutionsRad[i] < 0) principalSolutionsRad[i] += 2 * Math.PI;
+            principalSolutionsRad[i] = principalSolutionsRad[i] % (2 * Math.PI);
+        }
+      }
+
+      const allValidAnglesDeg = new Set();
+      const cycleDeg = 360;
+
+      principalSolutionsRad.forEach(solRad => {
+        let solDeg = solRad * 180 / Math.PI;
+
+        // Normalize solDeg to be the smallest positive or zero equivalent first
+        // This helps in generating coterminal angles systematically
+        solDeg = (solDeg % cycleDeg + cycleDeg) % cycleDeg; 
+        if (Math.abs(solDeg - cycleDeg) < 0.001) solDeg = 0; // Handle 360 as 0 for base
+
+        // Positive direction
+        for (let currentAngleDeg = solDeg; currentAngleDeg <= maxRangeDeg; currentAngleDeg += cycleDeg) {
+          if (currentAngleDeg >= minRangeDeg) {
+            allValidAnglesDeg.add(parseFloat(currentAngleDeg.toFixed(5))); // toFixed for float precision issues
+          }
+        }
+        // Negative direction (from first value less than solDeg)
+        for (let currentAngleDeg = solDeg - cycleDeg; currentAngleDeg >= minRangeDeg; currentAngleDeg -= cycleDeg) {
+          if (currentAngleDeg <= maxRangeDeg) { // Should always be true if >= minRangeDeg
+             allValidAnglesDeg.add(parseFloat(currentAngleDeg.toFixed(5)));
+          }
+        }
+      });
+      
+      // Special case for tan where principal solutions might be PI apart, not 2PI.
+      // The above loop with 360 cycle handles it if both distinct 0-2PI solutions are found.
+      // For tan, if Math.atan(ratioValueNumeric) gives theta, then theta + n*PI are solutions.
+      // My current principalSolutionsRad for tan should give two distinct solutions in [0, 2PI) if they exist.
+
+      const sortedAngles = Array.from(allValidAnglesDeg);
+      const positiveAngles = sortedAngles.filter(a => a >= -0.00001).sort((a, b) => a - b); // Include 0 in positives
+      const negativeAngles = sortedAngles.filter(a => a < -0.00001).sort((a, b) => b - a); // Sort negatives by value descending (e.g. -120, -240)
+      
+      const finalSortedAngles = [...positiveAngles, ...negativeAngles];
+
+      if (finalSortedAngles.length === 0) {
+        infoBox.innerHTML = '<p>No solutions in the given range.</p>';
+      } else {
+        let content = '';
+        finalSortedAngles.forEach((angleDeg, index) => {
+          // Round to a few decimal places to avoid floating point display issues before formatting
+          let displayAngleDeg = parseFloat(angleDeg.toFixed(3));
+          if (Math.abs(displayAngleDeg) < 0.0001) displayAngleDeg = 0; // Treat very small numbers as 0
+
+          const displayValue = formatAngleForDisplay(displayAngleDeg, unit);
+          content += `<p>&theta;<sub>${index + 1}</sub> = <span class="value">${displayValue}</span></p>`;
+        });
+        infoBox.innerHTML = content;
+      }
+    }
       document.getElementById('solutionOverlay').style.display = 'block';
+document.getElementById('infoBox').style.display = 'block'; // Show the info box
       solCtx.clearRect(0, 0, solCanvas.width, solCanvas.height);
       document.getElementById('solutionText').innerHTML = ''; // Clear previous text
 
       if (!animatedSolutionsEnabled || !initialShotData.cueX) { // Fallback if no initial data
         document.getElementById('solutionText').innerHTML = '<p>Shot complete. Click Continue.</p>';
         const cueBall = balls.find(b => b.number === 0) || { x: INITIAL_CUE_X, y: INITIAL_CUE_Y };
+populateSolutionAnglesBox(initialShotData, minAngleRange, maxAngleRange);
         drawSolutionCueBallMarker(cueBall);
         return;
       }
@@ -951,6 +1156,7 @@ function placeCueBall(event) {
           cueBallForAnimStart = { x: initialShotData.cueX, y: initialShotData.cueY, number: 0, color: '#fff' }; // Fallback
       }
       
+populateSolutionAnglesBox(initialShotData, minAngleRange, maxAngleRange);
       const animCuePos = { x: cueBallForAnimStart.x, y: cueBallForAnimStart.y, number: 0, color: '#fff' };
       const targetCuePos = { x: initialShotData.cueX, y: initialShotData.cueY };
 
@@ -965,6 +1171,7 @@ function placeCueBall(event) {
 
     function hideSolution() {
       document.getElementById('solutionOverlay').style.display = 'none';
+document.getElementById('infoBox').style.display = 'none'; // Hide the info box
       
       if (nonCueBallsForSolution.length > 0) {
         const cueBall = balls.find(b => b.number === 0); // Current cue ball (might be newly placed)
