@@ -96,6 +96,7 @@
     <br>
     <button id="analyzeBtn">Analyze Path</button>
     <button id="shootBtn">Shoot</button>
+    <button id="ballInHandBtn" onclick="toggleBallInHandMode()">Ball in Hand</button>
     <button id="toggleAnimationBtn">Animated Solutions: ON</button>
   </div>
   <div id="tableContainer">
@@ -111,6 +112,7 @@
     <button onclick="hideError()">OK</button>
   </div>
   <script>
+    let ballInHandMode = false;
     const sidePocketRadius = 16 * 1.3;
     const cornerPocketRadius = sidePocketRadius * 1.3;
     const canvas = document.getElementById('tableCanvas'), ctx = canvas.getContext('2d');
@@ -124,6 +126,7 @@
     let animatedSolutionsEnabled = true;
     let initialShotData = {};
     let nonCueBallsForSolution = [];
+let cueBallOriginalPositionBeforeHand = null;
     const INITIAL_CUE_X = 100;
     const INITIAL_CUE_Y = 200;
     
@@ -171,6 +174,69 @@
     document.getElementById('frictionSlider').addEventListener('input', e => {
       document.getElementById('frictionValue').textContent = e.target.value.padStart(5, '0');
     });
+
+function toggleBallInHandMode() {
+  ballInHandMode = !ballInHandMode;
+  const cueBall = balls[0];
+  if (ballInHandMode) {
+    // Entering Ball in Hand mode
+    cueBallOriginalPositionBeforeHand = { x: cueBall.x, y: cueBall.y };
+    cueBall.x = -1000; // Move cue ball off-screen
+    cueBall.y = -1000;
+    drawTable(); // Redraw to make cue ball disappear
+
+    document.getElementById('ballInHandBtn').textContent = 'Place Ball';
+    document.addEventListener('mousemove', updateCueBallPosition);
+    // Defer adding click listener to prevent immediate placement by the button click
+    setTimeout(() => {
+      // Ensure mode is still active before adding listener
+      if (ballInHandMode) {
+        document.addEventListener('click', placeCueBall);
+      }
+    }, 0);
+  } else {
+    // Exiting Ball in Hand mode (e.g., by clicking "Place Ball" again to cancel)
+    document.getElementById('ballInHandBtn').textContent = 'Ball in Hand';
+    document.removeEventListener('mousemove', updateCueBallPosition);
+    document.removeEventListener('click', placeCueBall); // Ensure this is removed
+
+    if (cueBallOriginalPositionBeforeHand) {
+      // Restore cue ball to its original position if placement was cancelled
+      cueBall.x = cueBallOriginalPositionBeforeHand.x;
+      cueBall.y = cueBallOriginalPositionBeforeHand.y;
+      cueBallOriginalPositionBeforeHand = null;
+      drawTable(); // Redraw to show restored cue ball
+    }
+  }
+}
+
+function drawBall(ball) {
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, ball.radius, 0, 2 * Math.PI);
+  ctx.fillStyle = ball.color;
+  ctx.fill();
+}
+
+function updateCueBallPosition(event) {
+  const cueBall = balls[0];
+  const rect = canvas.getBoundingClientRect();
+  cueBall.x = event.clientX - rect.left;
+  cueBall.y = event.clientY - rect.top;
+  drawTable(); // Redraw the table to show the cue ball moving
+}
+
+function placeCueBall(event) {
+  const cueBall = balls[0];
+  const rect = canvas.getBoundingClientRect();
+  cueBall.x = event.clientX - rect.left;
+  cueBall.y = event.clientY - rect.top;
+  drawTable(); // Redraw table to show final placement
+  ballInHandMode = false; // Exiting mode after placement
+  document.getElementById('ballInHandBtn').textContent = 'Ball in Hand';
+  document.removeEventListener('mousemove', updateCueBallPosition);
+  document.removeEventListener('click', placeCueBall);
+  cueBallOriginalPositionBeforeHand = null; // Successfully placed, no need to restore
+}
 
     function findClearSpot(x, y) {
       // Spiral search for a clear spot
@@ -247,7 +313,7 @@
       cueBallPocketedDuringShot = false; // Reset flag for the new shot
       const theta = computeTheta();
       if (theta === null) return;
-
+    
       // Store initial shot data for solution animation
       const ratioValueSelect = document.getElementById('ratioValueSelect');
       initialShotData = {
@@ -260,18 +326,49 @@
         unit: document.getElementById('unitSelect').value,
         actualTheta: theta
       };
-      
+    
+      // Check if entered options are compatible according to CAST rule
+      const sign = initialShotData.ratioValueNumeric >= 0 ? '+' : '-';
+      if (Math.abs(initialShotData.ratioValueNumeric) !== 1 && !isCompatible(initialShotData.ratioType, initialShotData.quadrant, sign)) {
+        displayMessage("Invalid shot. You lose a turn.");
+        return;
+      }
+    
       const power = parseFloat(document.getElementById('powerSlider').value) * 0.8;
       const friction = parseFloat(document.getElementById('frictionSlider').value);
-      
+    
       balls[0].vx = Math.cos(theta) * power;
       balls[0].vy = Math.sin(-theta) * power;
       balls.forEach(b => b.friction = friction);
-      
+    
       document.getElementById('shootBtn').disabled = true;
       isMoving = true;
       animateShot();
     }
+    
+    function isCompatible(ratioType, quadrant, sign) {
+      if (ratioType === 'sin' || ratioType === 'csc') {
+        return (sign === '+' && (quadrant === 1 || quadrant === 2)) || (sign === '-' && (quadrant === 3 || quadrant === 4));
+      } else if (ratioType === 'cos' || ratioType === 'sec') {
+        return (sign === '+' && (quadrant === 1 || quadrant === 4)) || (sign === '-' && (quadrant === 2 || quadrant === 3));
+      } else if (ratioType === 'tan' || ratioType === 'cot') {
+        return (sign === '+' && (quadrant === 1 || quadrant === 3)) || (sign === '-' && (quadrant === 2 || quadrant === 4));
+      }
+      return false;
+    }
+    
+    // New function to display a message to the player
+   function displayMessage(message) {
+     const messageElement = document.getElementById('errorOverlay');
+     messageElement.style.display = 'block';
+     const errorTextElement = document.getElementById('errorText');
+     errorTextElement.textContent = message;
+     // You may want to add a timeout to clear the message after a few seconds
+     setTimeout(() => {
+       messageElement.style.display = 'none';
+       errorTextElement.textContent = '';
+     }, 3000);
+   }
 
     function startGame(type) {
       gameType = type;
